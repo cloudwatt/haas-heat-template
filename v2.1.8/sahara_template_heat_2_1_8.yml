@@ -1,0 +1,122 @@
+heat_template_version: 2013-05-23
+
+description: Stack orchestration heat HaaS
+
+parameter_groups:
+- label: Sahara
+  parameters:
+    - keypair_name
+    - flavor_name
+    - OS_USERNAME
+    - OS_PASSWORD
+    - OS_TENANT_NAME
+
+parameters:
+  keypair_name:
+    type: string
+    description: Name of keypair to assign to Sahara
+    label: SSH Keypair
+
+  flavor_name:
+    type: string
+    description: Flavor to use for the server
+    default : n1.cw.standard-2
+    label: Instance Type (Flavor)
+    constraints:
+      - allowed_values: 
+        - n1.cw.highcpu-4
+        - n1.cw.highcpu-8
+        - n1.cw.standard-2
+        - n1.cw.standard-4
+        - n1.cw.standard-8
+        - n1.cw.standard-12
+        - n1.cw.standard-16
+        - n1.cw.highmem-2
+        - n1.cw.highmem-4
+        - n1.cw.highmem-8
+        - n1.cw.highmem-12
+
+  OS_USERNAME:
+    type: string
+    description: OpenStack Username
+
+  OS_PASSWORD:
+    type: string
+    description: OpenStack Password
+    hidden: true
+
+  OS_TENANT_NAME:
+    type: string
+    description: OpenStack Tenant Name
+
+
+resources:
+  network:
+    type: OS::Neutron::Net
+
+  subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: network }
+      ip_version: 4
+      cidr: 10.0.1.0/24
+      allocation_pools:
+        - { start: 10.0.1.100, end: 10.0.1.199 }
+
+  security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules:
+        - { direction: ingress, protocol: TCP, port_range_min: 22, port_range_max: 22 }
+        - { direction: ingress, protocol: TCP, port_range_min: 80, port_range_max: 80 }
+        - { direction: ingress, protocol: TCP, port_range_min: 443, port_range_max: 443 }
+        - { direction: ingress, protocol: TCP, port_range_min: 8386, port_range_max: 8386 }
+        - { direction: ingress, protocol: ICMP }
+        - { direction: egress, protocol: ICMP }
+        - { direction: egress, protocol: TCP }
+        - { direction: egress, protocol: UDP }
+
+  floating_ip:
+    type: OS::Neutron::FloatingIP
+    properties:
+      floating_network_id: 6ea98324-0f14-49f6-97c0-885d1b8dc517
+
+  server:
+    type: OS::Nova::Server
+    properties:
+      key_name: { get_param: keypair_name }
+      image: daf56116-7b0d-432c-b19c-c058100b543b
+      flavor: { get_param: flavor_name }
+      networks:
+        - network: { get_resource: network }
+      security_groups:
+        - { get_resource: security_group }
+      user_data_format: RAW  
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+            cat > /tmp/keystone.rc <<"EOF"
+            OS_TENANT_NAME=$OS_TENANT_NAME
+            OS_USERNAME=$OS_USERNAME
+            OS_PASSWORD=$OS_PASSWORD
+            EOF
+          params:
+            $OS_TENANT_NAME: { get_param: OS_TENANT_NAME }
+            $OS_USERNAME: { get_param: OS_USERNAME }
+            $OS_PASSWORD: { get_param: OS_PASSWORD }
+
+  floating_ip_link:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floating_ip }
+      server_id: { get_resource: server }
+
+
+outputs:
+  server_private_ip:
+    description: Sahara Instance's private IP address 
+    value: { get_attr: [ server, first_address ] }
+  server_public_ip:
+    description: Sahara Instance's public IP address
+    value: { get_attr: [ floating_ip, floating_ip_address ] }
